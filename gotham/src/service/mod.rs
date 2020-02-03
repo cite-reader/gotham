@@ -1,5 +1,5 @@
 //! Defines the `GothamService` type which is used to wrap a Gotham application and interface with
-//! Hyper.
+//! Tower.
 
 use std::net::SocketAddr;
 use std::panic::AssertUnwindSafe;
@@ -24,44 +24,39 @@ use crate::state::{set_request_id, State};
 
 mod trap;
 
-/// Wraps a `NewHandler` which will be used to serve requests. Used in `gotham::os::*` to bind
-/// incoming connections to `ConnectedGothamService` values.
-pub(crate) struct GothamService<T>
+/// Wraps a [`NewHandler`] in a Tower [`Service`].
+///
+/// [`NewHandler`]: ../handler/trait.NewHandler.html
+/// [`Service`]: ../../tower_service/trait.Service.html
+pub struct GothamService<T>
 where
     T: NewHandler + 'static,
 {
     handler: Arc<T>,
+    client_addr: Option<SocketAddr>,
 }
 
 impl<T> GothamService<T>
 where
     T: NewHandler + 'static,
 {
-    pub(crate) fn new(handler: T) -> GothamService<T> {
+    /// Convert a handler factory to a service.
+    pub fn new(handler: T) -> GothamService<T> {
         GothamService {
             handler: Arc::new(handler),
+            client_addr: None,
         }
     }
 
-    pub(crate) fn connect(&self, client_addr: SocketAddr) -> ConnectedGothamService<T> {
-        ConnectedGothamService {
-            client_addr,
+    pub(crate) fn connect(&self, client_addr: SocketAddr) -> Self {
+        GothamService {
             handler: self.handler.clone(),
+            client_addr: Some(client_addr),
         }
     }
 }
 
-/// A `GothamService` which has been connected to a client. The major difference is that a
-/// `client_addr` has been assigned (as this isn't available from Hyper).
-pub(crate) struct ConnectedGothamService<T>
-where
-    T: NewHandler + 'static,
-{
-    handler: Arc<T>,
-    client_addr: SocketAddr,
-}
-
-impl<T> Service<Request<Body>> for ConnectedGothamService<T>
+impl<T> Service<Request<Body>> for GothamService<T>
 where
     T: NewHandler,
 {
@@ -79,7 +74,9 @@ where
     fn call(&mut self, req: Request<Body>) -> Self::Future {
         let mut state = State::new();
 
-        put_client_addr(&mut state, self.client_addr);
+        if let Some(client_addr) = self.client_addr {
+            put_client_addr(&mut state, client_addr);
+        }
 
         let (
             request::Parts {
