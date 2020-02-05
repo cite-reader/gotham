@@ -1,0 +1,11 @@
+[package]
+name = "gotham_examples_hello_world_uds"
+description = "A Hello World example application for working with Unix domain sockets"
+version = "0.0.0"
+publish = false
+edition = "2018"
+
+[dependencies]
+gotham = { path = "../../gotham", default_features = false }
+hyper = "0.13"
+tokio = { version = "0.2", features = ["full", "parking_lot"] }

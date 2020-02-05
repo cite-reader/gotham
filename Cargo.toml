@@ -14,6 +14,7 @@ members = [
     "examples/hello_world",
     "examples/hello_world_tls",
     "examples/hello_world_until",
+    "examples/hello_world_uds",
     "examples/shared_state",
 
     # Tera template
