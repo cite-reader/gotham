@@ -33,7 +33,14 @@ where
     T: NewHandler + 'static,
 {
     handler: Arc<T>,
-    client_addr: Option<SocketAddr>,
+}
+
+/// A [`GothamService`] connected to an IPv4 or IPv6 client
+///
+/// [`GothamService`]: ./struct.GothamService.html
+pub struct InetGothamService<T> {
+    handler: Arc<T>,
+    client_addr: SocketAddr,
 }
 
 impl<T> GothamService<T>
@@ -44,14 +51,14 @@ where
     pub fn new(handler: T) -> GothamService<T> {
         GothamService {
             handler: Arc::new(handler),
-            client_addr: None,
         }
     }
 
-    pub(crate) fn connect(&self, client_addr: SocketAddr) -> Self {
-        GothamService {
+    /// Connect to an IP or IP6 client
+    pub fn connect(&self, client_addr: SocketAddr) -> InetGothamService<T> {
+        InetGothamService {
             handler: self.handler.clone(),
-            client_addr: Some(client_addr),
+            client_addr: client_addr,
         }
     }
 }
@@ -72,42 +79,74 @@ where
     }
 
     fn call(&mut self, req: Request<Body>) -> Self::Future {
-        let mut state = State::new();
+        let state = State::new();
 
-        if let Some(client_addr) = self.client_addr {
-            put_client_addr(&mut state, client_addr);
-        }
-
-        let (
-            request::Parts {
-                method,
-                uri,
-                version,
-                headers,
-                //extensions?
-                ..
-            },
-            body,
-        ) = req.into_parts();
-
-        state.put(RequestPathSegments::new(uri.path()));
-        state.put(method);
-        state.put(uri);
-        state.put(version);
-        state.put(headers);
-        state.put(body);
-
-        {
-            let request_id = set_request_id(&mut state);
-            debug!(
-                "[DEBUG][{}][Thread][{:?}]",
-                request_id,
-                thread::current().id(),
-            );
-        };
-
-        trap::call_handler(&*self.handler, AssertUnwindSafe(state))
+        dispatch_request(&*self.handler, state, req)
     }
+}
+
+impl<T> Service<Request<Body>> for InetGothamService<T>
+where
+    T: NewHandler + 'static,
+{
+    type Response = Response<Body>;
+    type Error = failure::Compat<failure::Error>;
+    type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
+
+    fn poll_ready(&mut self, _cx: &mut task::Context) -> Poll<Result<(), Self::Error>> {
+        Poll::Ready(Ok(()))
+    }
+
+    fn call(&mut self, req: Request<Body>) -> Self::Future {
+        let mut state = State::new();
+        put_client_addr(&mut state, self.client_addr);
+        dispatch_request(&*self.handler, state, req)
+    }
+}
+
+/// Perform the last parts of request dispatch, which are common to all service implementations.
+///
+/// The incoming request is disassembled into its parts, which are inserted into the State,
+/// and then the handler itself is invoked.
+fn dispatch_request<'a, H>(
+    handler: &H,
+    mut state: State,
+    req: Request<Body>,
+) -> Pin<
+    Box<dyn Future<Output = Result<Response<Body>, failure::Compat<failure::Error>>> + Send + 'a>,
+>
+where
+    H: NewHandler + 'a,
+{
+    let (
+        request::Parts {
+            method,
+            uri,
+            version,
+            headers,
+            //extensions?
+            ..
+        },
+        body,
+    ) = req.into_parts();
+
+    state.put(RequestPathSegments::new(uri.path()));
+    state.put(method);
+    state.put(uri);
+    state.put(version);
+    state.put(headers);
+    state.put(body);
+
+    {
+        let request_id = set_request_id(&mut state);
+        debug!(
+            "[DEBUG][{}][Thread][{:?}]",
+            request_id,
+            thread::current().id(),
+        );
+    };
+
+    trap::call_handler(handler, AssertUnwindSafe(state))
 }
 
 #[cfg(test)]
